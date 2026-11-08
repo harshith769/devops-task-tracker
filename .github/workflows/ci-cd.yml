@@ -1,0 +1,178 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel an older run of the same branch when a newer commit is pushed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------- CI
+  test:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (flake8)
+        run: flake8 app tests wsgi.py scripts
+
+      - name: Unit tests with coverage
+        run: pytest -v --cov=app --cov-report=term-missing --cov-report=xml --junitxml=test-results.xml
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            test-results.xml
+            coverage.xml
+
+  terraform:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: terraform init (no backend)
+        run: terraform init -backend=false -input=false
+      - name: terraform validate
+        run: terraform validate
+
+  # ---------------------------------------------------------------- Build
+  build-and-push:
+    name: Build & push image
+    needs: [test, terraform]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.vars.outputs.image }}:sha-${{ steps.vars.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image name (registry paths must be lowercase)
+        id: vars
+        run: |
+          echo "image=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.vars.outputs.image }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------- CD
+  deploy-staging:
+    name: Deploy to staging & smoke test
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      packages: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: tasks
+          POSTGRES_USER: tasks
+          POSTGRES_PASSWORD: ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tasks -d tasks"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy the image that was just published
+        env:
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+        run: |
+          docker pull "$IMAGE"
+          docker run -d --name task-tracker --network host \
+            -e APP_ENV=staging \
+            -e DATABASE_URL=postgresql+psycopg://tasks:ci-password@localhost:5432/tasks \
+            "$IMAGE"
+
+      - name: Smoke test
+        run: bash scripts/smoke_test.sh http://localhost:8000 60
+
+      - name: Container logs (on failure)
+        if: failure()
+        run: docker logs task-tracker
+
+      - name: Deployment summary
+        env:
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+        run: |
+          {
+            echo "### Staging deployment"
+            echo "- Image: \`$IMAGE\`"
+            echo "- Health: \`$(curl -fsS http://localhost:8000/health)\`"
+          } >> "$GITHUB_STEP_SUMMARY"

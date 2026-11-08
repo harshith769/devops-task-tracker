@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Task Tracker</title>
+  <style>
+    :root { --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; --ok:#15803d; --bad:#b91c1c; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--ink); background:#f8fafc; }
+    header { background:#0f172a; color:#fff; padding:14px 28px; display:flex; align-items:center; justify-content:space-between; }
+    header h1 { margin:0; font-size:20px; letter-spacing:.3px; }
+    .meta { font-size:13px; color:#cbd5e1; display:flex; gap:16px; align-items:center; }
+    .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#9ca3af; margin-right:6px; }
+    main { max-width:960px; margin:24px auto; padding:0 20px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin-bottom:18px; }
+    h2 { font-size:16px; margin:0 0 12px; }
+    form { display:grid; grid-template-columns: 2fr 3fr 1fr auto; gap:10px; }
+    input, select, button { font:inherit; padding:8px 10px; border:1px solid #cbd5e1; border-radius:6px; }
+    button { background:var(--accent); color:#fff; border:none; cursor:pointer; }
+    button.small { padding:4px 8px; font-size:12px; background:#e2e8f0; color:var(--ink); }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
+    .pill { padding:2px 8px; border-radius:999px; font-size:12px; background:#eef2ff; }
+    .pill.done { background:#dcfce7; } .pill.in_progress { background:#fef9c3; }
+    .stats { display:flex; gap:12px; }
+    .stat { flex:1; background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px 16px; }
+    .stat b { display:block; font-size:22px; }
+    .stat span { color:var(--muted); font-size:12px; }
+    #msg { color:var(--bad); font-size:13px; min-height:18px; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Task Tracker</h1>
+    <div class="meta">
+      <span><span class="dot" id="health-dot"></span><span id="health-text">checking...</span></span>
+      <span>v{{ version }} &middot; {{ env }}</span>
+    </div>
+  </header>
+  <main>
+    <div class="stats">
+      <div class="stat"><b id="s-todo">0</b><span>To do</span></div>
+      <div class="stat"><b id="s-progress">0</b><span>In progress</span></div>
+      <div class="stat"><b id="s-done">0</b><span>Done</span></div>
+    </div>
+    <div class="card" style="margin-top:18px">
+      <h2>Add a task</h2>
+      <form id="task-form">
+        <input id="title" placeholder="Title" required maxlength="120">
+        <input id="description" placeholder="Description (optional)">
+        <select id="priority">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+        <button type="submit">Add</button>
+      </form>
+      <div id="msg"></div>
+    </div>
+    <div class="card">
+      <h2>Tasks</h2>
+      <table>
+        <thead><tr><th>#</th><th>Title</th><th>Priority</th><th>Status</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <script>
+    const next = { todo: "in_progress", in_progress: "done", done: "todo" };
+    const label = { todo: "To do", in_progress: "In progress", done: "Done" };
+
+    async function checkHealth() {
+      try {
+        const r = await fetch("/health");
+        const ok = r.ok;
+        document.getElementById("health-dot").style.background = ok ? "#22c55e" : "#ef4444";
+        document.getElementById("health-text").textContent = ok ? "healthy" : "degraded";
+      } catch (e) {
+        document.getElementById("health-dot").style.background = "#ef4444";
+        document.getElementById("health-text").textContent = "unreachable";
+      }
+    }
+
+    async function load() {
+      const r = await fetch("/api/tasks");
+      const data = await r.json();
+      const rows = document.getElementById("rows");
+      rows.innerHTML = "";
+      const counts = { todo: 0, in_progress: 0, done: 0 };
+      for (const t of data.tasks) {
+        counts[t.status]++;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${t.id}</td><td></td><td>${t.priority}</td>
+          <td><span class="pill ${t.status}">${label[t.status]}</span></td>
+          <td><button class="small" data-id="${t.id}" data-next="${next[t.status]}">Move</button>
+              <button class="small" data-del="${t.id}">Delete</button></td>`;
+        tr.children[1].textContent = t.title;
+        rows.appendChild(tr);
+      }
+      document.getElementById("s-todo").textContent = counts.todo;
+      document.getElementById("s-progress").textContent = counts.in_progress;
+      document.getElementById("s-done").textContent = counts.done;
+    }
+
+    document.getElementById("task-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = {
+        title: document.getElementById("title").value,
+        description: document.getElementById("description").value,
+        priority: document.getElementById("priority").value,
+      };
+      const r = await fetch("/api/tasks", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      document.getElementById("msg").textContent = r.ok ? "" : (await r.json()).error;
+      if (r.ok) { e.target.reset(); load(); }
+    });
+
+    document.getElementById("rows").addEventListener("click", async (e) => {
+      const b = e.target;
+      if (b.dataset.id) {
+        await fetch(`/api/tasks/${b.dataset.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: b.dataset.next }),
+        });
+      } else if (b.dataset.del) {
+        await fetch(`/api/tasks/${b.dataset.del}`, { method: "DELETE" });
+      } else { return; }
+      load();
+    });
+
+    checkHealth(); load(); setInterval(checkHealth, 10000);
+  </script>
+</body>
+</html>

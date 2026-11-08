@@ -1,0 +1,49 @@
+groups:
+  - name: task-tracker-alerts
+    rules:
+      - alert: TaskTrackerDown
+        expr: up{job="task-tracker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Task Tracker is down"
+          description: "Prometheus could not scrape {{ $labels.instance }} for more than 1 minute."
+          runbook: "docs/runbook.md#1-service-down"
+
+      - alert: TaskTrackerHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="task-tracker", status=~"5.."}[5m]))
+            /
+          clamp_min(sum(rate(http_requests_total{job="task-tracker"}[5m])), 0.001)
+            > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5% of requests are failing with 5xx"
+          description: "5xx error ratio is {{ $value | humanizePercentage }} over the last 5 minutes."
+          runbook: "docs/runbook.md#2-high-error-rate"
+
+      - alert: TaskTrackerHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{job="task-tracker"}[5m]))
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency above 500 ms"
+          description: "95th percentile latency is {{ $value | humanizeDuration }}."
+          runbook: "docs/runbook.md#3-high-latency-or-high-cpu"
+
+      - alert: TaskTrackerHighCPU
+        expr: rate(process_cpu_seconds_total{job="task-tracker"}[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Task Tracker process is using more than 80% of a CPU core"
+          description: "CPU usage is {{ $value | humanizePercentage }} of one core for 10 minutes."
+          runbook: "docs/runbook.md#3-high-latency-or-high-cpu"

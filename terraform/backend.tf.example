@@ -1,0 +1,14 @@
+# Remote state for team use (rename to backend.tf, then run `terraform init -migrate-state`).
+#
+# Keeping state in a versioned S3 bucket means every team member and the CI
+# pipeline work from the same state, old versions can be restored, and
+# `use_lockfile` stops two `terraform apply` runs from changing it at once.
+terraform {
+  backend "s3" {
+    bucket       = "task-tracker-terraform-state"
+    key          = "dev/terraform.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+}

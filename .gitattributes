@@ -1,0 +1,6 @@
+# Keep Unix line endings for scripts even when the repo is pushed from Windows.
+*.sh    text eol=lf
+*.py    text eol=lf
+*.tftpl text eol=lf
+*.yml   text eol=lf
+Dockerfile text eol=lf

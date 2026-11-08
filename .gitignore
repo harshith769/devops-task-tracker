@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.coverage
+coverage.xml
+test-results.xml
+instance/
+*.db
+
+# Runtime output
+logs/
+data/
+backups/
+.env
+
+# Terraform
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+
+# Terraform local configuration and state
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example

@@ -1,0 +1,12 @@
+#!/bin/bash
+# Rendered by Terraform's templatefile(); runs once on the VM's first boot.
+set -euxo pipefail
+
+apt-get update -y
+apt-get install -y docker.io
+systemctl enable --now docker
+
+docker run -d --name task-tracker --restart unless-stopped \
+  -p "${app_port}:8000" \
+  -e APP_ENV=production \
+  "${container_image}"
