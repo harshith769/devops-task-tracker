@@ -42,7 +42,7 @@ jobs:
         run: flake8 app tests wsgi.py scripts
 
       - name: Unit tests with coverage
-        run: pytest -v --cov=app --cov-report=term-missing --cov-report=xml --junitxml=test-results.xml
+        run: python -m pytest -v --cov=app --cov-report=term-missing --cov-report=xml --junitxml=test-results.xml
 
       - name: Upload test and coverage reports
         if: always()
